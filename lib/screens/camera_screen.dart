@@ -56,9 +56,9 @@ class _CameraScreenState extends State<CameraScreen> {
         'audio': false,
         'video': {
           'facingMode': 'environment',
-          'width': {'ideal': 1280},
-          'height': {'ideal': 720},
-          'frameRate': {'ideal': 30, 'max': 30},
+          'width': {'ideal': 640},
+          'height': {'ideal': 360},
+          'frameRate': {'ideal': 15, 'max': 15},
         },
       });
       if (!mounted) {
@@ -123,7 +123,13 @@ class _CameraScreenState extends State<CameraScreen> {
       _pendingCandidates.clear();
 
       for (final track in stream.getVideoTracks()) {
-        await peer.addTrack(track, stream);
+        final sender = await peer.addTrack(track, stream);
+        final parameters = sender.parameters;
+        if (parameters.encodings != null && parameters.encodings!.isNotEmpty) {
+          parameters.encodings!.first.maxBitrate = 500000;
+          parameters.encodings!.first.maxFramerate = 15;
+          await sender.setParameters(parameters);
+        }
       }
 
       peer.onIceCandidate = (candidate) {

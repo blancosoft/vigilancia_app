@@ -31,14 +31,34 @@ adb install -r build\app\outputs\flutter-apk\app-debug.apk
 
 ## Uso
 
-1. En el teléfono que tendrá la cámara, pulsa **Activar en el teléfono
-   cámara** y concede el permiso.
-2. Lee la dirección IPv4 que aparece en pantalla.
-3. En el segundo teléfono, escribe esa dirección y pulsa **Conectar como
-   visor**. Acepta el permiso de red local si Android lo solicita.
+### Un teléfono cámara
 
-El puerto de señalización TCP es `8080`. La aplicación muestra la IP para que no
-sea necesario conocerla previamente.
+1. En cada teléfono que actuará como cámara, abre la app y pulsa **Activar en
+   el teléfono cámara**.
+2. Concede el permiso de cámara y deja la pantalla abierta.
+3. Anota la dirección IPv4 que aparece en ese teléfono, por ejemplo
+   `192.168.1.25`.
+
+### Un teléfono visor con hasta cuatro cámaras
+
+1. En el teléfono visor, escribe las IPs en los campos **IP del teléfono
+   cámara 1** a **IP del teléfono cámara 4**. Los campos vacíos se ignoran.
+2. Todos los teléfonos deben estar en la misma red Wi-Fi, sin VPN, Mobile Data
+   ni aislamiento de clientes.
+3. Pulsa **Conectar cámaras**. Cada fuente establece su propia conexión WebRTC
+   y aparece en una cuadrícula.
+4. Toca cualquier pantalla para ampliar esa cámara. Usa la flecha superior
+   izquierda o el botón de cerrar para volver a la cuadrícula.
+5. El botón derefresh de cada fuente vuelve a conectar únicamente esa cámara.
+
+El puerto de señalización TCP es `8080` en todos los teléfonos cámara. La
+aplicación muestra la IP para que no sea necesario conocerla previamente.
+
+Visualizar cuatro transmisiones simultáneas consume más batería, memoria y
+procesador. Para reducir la carga, cada teléfono cámara transmite a `640×360`,
+hasta `15 FPS`, con un límite aproximado de `500 kbps` por fuente. Si alguna cámara
+falla, las demás continúan funcionando y la fuente con error puede reconectarse
+individualmente.
 
 ## Problemas frecuentes
 

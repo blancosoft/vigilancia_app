@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'screens/camera_screen.dart';
 import 'screens/viewer_screen.dart';
+import 'services/streaming_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,6 +21,7 @@ class VigilanciaApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFFF1F3F5),
         inputDecorationTheme: const InputDecorationTheme(
           border: OutlineInputBorder(),
         ),
@@ -37,21 +39,33 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _hostController = TextEditingController();
+  final _hostControllers = List<TextEditingController>.generate(
+    4,
+    (_) => TextEditingController(),
+  );
 
   @override
   void dispose() {
-    _hostController.dispose();
+    for (final controller in _hostControllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
   void _openViewer() {
-    final host = _hostController.text.trim();
-    if (host.isEmpty) {
+    final hosts = <String>[];
+    for (final controller in _hostControllers) {
+      final value = controller.text.trim();
+      if (value.isEmpty) continue;
+      final host = StreamingService.normalizeHost(value);
+      if (!hosts.contains(host)) hosts.add(host);
+    }
+
+    if (hosts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Escribe la IP mostrada en el teléfono cámara.',
+            'Escribe al menos una IP de un teléfono cámara.',
           ),
         ),
       );
@@ -60,7 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => ViewerScreen(host: host),
+        builder: (_) => ViewerScreen(hosts: hosts),
       ),
     );
   }
@@ -68,15 +82,35 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF1F3F5),
       appBar: AppBar(title: const Text('Vigilancia Wi-Fi')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
-            Icon(
-              Icons.videocam_outlined,
-              size: 72,
-              color: Theme.of(context).colorScheme.primary,
+            Center(
+              child: SizedBox(
+                width: 180,
+                height: 180,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: ColoredBox(
+                    color: Colors.white,
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Image.asset(
+                        'icon.png',
+                        width: 172,
+                        height: 172,
+                        fit: BoxFit.contain,
+                        alignment: Alignment.center,
+                        filterQuality: FilterQuality.high,
+                        semanticLabel: 'Icono de vigilancia',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
             const SizedBox(height: 16),
             Text(
@@ -111,30 +145,41 @@ class _HomeScreenState extends State<HomeScreen> {
               'Ver desde otro teléfono',
               style: Theme.of(context).textTheme.titleMedium,
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _hostController,
-              keyboardType: TextInputType.url,
-              autocorrect: false,
-              enableSuggestions: false,
-              textInputAction: TextInputAction.go,
-              onSubmitted: (_) => _openViewer(),
-              inputFormatters: [
-                FilteringTextInputFormatter.deny(RegExp(r'\s')),
-              ],
-              decoration: const InputDecoration(
-                labelText: 'IP del teléfono cámara',
-                hintText: '192.168.1.25',
-                prefixIcon: Icon(Icons.router_outlined),
-              ),
+            const SizedBox(height: 4),
+            const Text(
+              'Escribe entre una y cuatro IPs. Deja vacíos los campos que no uses.',
+              textAlign: TextAlign.center,
             ),
+            const SizedBox(height: 12),
+            for (var index = 0; index < _hostControllers.length; index++) ...[
+              TextField(
+                controller: _hostControllers[index],
+                keyboardType: TextInputType.url,
+                autocorrect: false,
+                enableSuggestions: false,
+                textInputAction: index == 3
+                    ? TextInputAction.go
+                    : TextInputAction.next,
+                onSubmitted: index == 3 ? (_) => _openViewer() : null,
+                inputFormatters: [
+                  FilteringTextInputFormatter.deny(RegExp(r'\s')),
+                ],
+                decoration: InputDecoration(
+                  labelText: 'IP del teléfono cámara ${index + 1}',
+                  hintText: '192.168.1.${25 + index}',
+                  prefixIcon: const Icon(Icons.router_outlined),
+                ),
+              ),
+              if (index != _hostControllers.length - 1)
+                const SizedBox(height: 10),
+            ],
             const SizedBox(height: 12),
             FilledButton.tonalIcon(
               onPressed: _openViewer,
-              icon: const Icon(Icons.link),
+              icon: const Icon(Icons.grid_view),
               label: const Padding(
                 padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('Conectar como visor'),
+                child: Text('Conectar cámaras'),
               ),
             ),
           ],

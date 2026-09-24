@@ -159,16 +159,19 @@ class LocalNetworkPermissionException implements Exception {
 /// Canal TCP local para intercambiar SDP y candidatos ICE.
 ///
 /// Usa JSON delimitado por saltos de línea porque una lectura de Socket puede
-/// contener varios mensajes o solo una parte de uno.
+/// contener varios mensajes o solo una parte de uno. Las generaciones impedían
+/// que un Socket.connect antiguo se asigne después de cerrar o reconectar.
 class StreamingService {
   StreamingService();
 
   ServerSocket? _server;
   Socket? _socket;
   StreamSubscription<String>? _subscription;
-  final _pendingLines = StringBuffer();
+  Future<void> _acceptQueue = Future<void>.value();
   bool _disposed = false;
   bool _isServer = false;
+  int _serverGeneration = 0;
+  int _clientGeneration = 0;
 
   final _messageController = StreamController<SignalingMessage>.broadcast();
   final _connectionController = StreamController<Socket>.broadcast();
@@ -181,12 +184,8 @@ class StreamingService {
   Stream<Object> get errors => _errorController.stream;
 
   bool get isConnected => _socket != null && !_disposed;
-
   Socket? get currentSocket => _socket;
-
   bool get isServerRunning => _isServer && _server != null && !_disposed;
-
-  bool isCurrentSocket(Socket? socket) => identical(_socket, socket);
 
   /// Devuelve primero las direcciones de interfaces Wi-Fi y, después, otras
   /// interfaces privadas. Así se evita mostrar una IP de VPN o de datos móviles.
@@ -263,14 +262,29 @@ class StreamingService {
 
   Future<void> startServer() async {
     await _closeClient();
-    _server = await ServerSocket.bind(
+    await _closeServer();
+    if (_disposed) return;
+
+    final generation = ++_serverGeneration;
+    final server = await ServerSocket.bind(
       InternetAddress.anyIPv4,
       signalingPort,
     );
+    if (_disposed || generation != _serverGeneration) {
+      await server.close();
+      return;
+    }
+
+    _server = server;
     _isServer = true;
-    _server!.listen(
+    server.listen(
       (socket) {
-        unawaited(_acceptSocket(socket));
+        _acceptQueue = _acceptQueue
+            .then((_) => _acceptSocket(socket, generation))
+            .catchError((Object error) {
+          if (!_disposed) _errorController.add(error);
+          socket.destroy();
+        });
       },
       onError: (Object error) {
         if (!_disposed) _errorController.add(error);
@@ -278,52 +292,54 @@ class StreamingService {
     );
   }
 
-  Future<void> _acceptSocket(Socket socket) async {
+  Future<void> _acceptSocket(Socket socket, int serverGeneration) async {
+    if (_disposed || serverGeneration != _serverGeneration) {
+      socket.destroy();
+      return;
+    }
+
     await _closeClient();
+    if (_disposed || serverGeneration != _serverGeneration) {
+      socket.destroy();
+      return;
+    }
+
+    final generation = _clientGeneration;
     _socket = socket;
-    _pendingLines.clear();
-    _subscription = socket
-        .cast<List<int>>()
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen(
-      (line) {
-        if (line.trim().isEmpty) return;
-        try {
-          _messageController.add(SignalingMessage.decode(line));
-        } on Object catch (error) {
-          if (!_disposed) {
-            _errorController.add(FormatException('Señal inválida: $error'));
-          }
-        }
-      },
-      onError: (Object error, StackTrace stackTrace) {
-        if (!_disposed) _errorController.add(error);
-        unawaited(_handleClientClosed(socket));
-      },
-      onDone: () => unawaited(_handleClientClosed(socket)),
-      cancelOnError: false,
-    );
-    if (!_disposed) _connectionController.add(socket);
+    _attachSocket(socket, generation);
+    _connectionController.add(socket);
   }
 
   Future<void> connect(String host) async {
     await _closeClient();
+    if (_disposed) return;
+
     final normalizedHost = normalizeHost(host);
-    _isServer = false;
+    final generation = _clientGeneration;
     final socket = await Socket.connect(
       normalizedHost,
       signalingPort,
       timeout: const Duration(seconds: 10),
     );
+
+    if (_disposed || generation != _clientGeneration) {
+      socket.destroy();
+      return;
+    }
+
+    _isServer = false;
     _socket = socket;
-    _pendingLines.clear();
+    _attachSocket(socket, generation);
+  }
+
+  void _attachSocket(Socket socket, int generation) {
     _subscription = socket
         .cast<List<int>>()
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(
       (line) {
+        if (_disposed || generation != _clientGeneration) return;
         if (line.trim().isEmpty) return;
         try {
           _messageController.add(SignalingMessage.decode(line));
@@ -335,23 +351,28 @@ class StreamingService {
       },
       onError: (Object error, StackTrace stackTrace) {
         if (!_disposed) _errorController.add(error);
-        unawaited(_handleClientClosed(socket));
+        unawaited(_handleClientClosed(socket, generation));
       },
-      onDone: () => unawaited(_handleClientClosed(socket)),
+      onDone: () => unawaited(_handleClientClosed(socket, generation)),
       cancelOnError: false,
     );
   }
 
   void send(SignalingMessage message) {
     final socket = _socket;
-    if (socket == null) {
+    if (_disposed || socket == null) {
       throw const SocketException('No existe una conexión de señalización.');
     }
     socket.write(message.encode());
   }
 
-  Future<void> _handleClientClosed(Socket socket) async {
-    if (!identical(_socket, socket)) return;
+  Future<void> _handleClientClosed(
+    Socket socket,
+    int generation,
+  ) async {
+    if (generation != _clientGeneration || !identical(_socket, socket)) {
+      return;
+    }
     _socket = null;
     await _subscription?.cancel();
     _subscription = null;
@@ -359,36 +380,35 @@ class StreamingService {
   }
 
   Future<void> _closeClient() async {
+    _clientGeneration++;
     final socket = _socket;
     _socket = null;
     await _subscription?.cancel();
     _subscription = null;
-    _pendingLines.clear();
     if (socket != null) {
       socket.destroy();
     }
   }
 
+  Future<void> _closeServer() async {
+    _serverGeneration++;
+    final server = _server;
+    _server = null;
+    _isServer = false;
+    await server?.close();
+  }
+
   Future<void> close() async {
     if (_disposed) return;
     await _closeClient();
-    await _server?.close();
-    _server = null;
-    _isServer = false;
-  }
-
-  Future<void> reset() async {
-    if (_disposed) return;
-    await _closeClient();
+    await _closeServer();
   }
 
   Future<void> dispose() async {
     if (_disposed) return;
-    await _closeClient();
-    await _server?.close();
-    _server = null;
-    _isServer = false;
     _disposed = true;
+    await _closeClient();
+    await _closeServer();
     await _messageController.close();
     await _connectionController.close();
     await _disconnectionController.close();
